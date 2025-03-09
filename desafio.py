@@ -4,79 +4,76 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 import os
 import smtplib
+import pandas as pd
+import csv
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.support import expected_conditions as EC
 from webdriver_manager.chrome import ChromeDriverManager
-import csv 
 
-# Configuração e acesso ao site
+# Configuração do WebDriver
+service = Service(ChromeDriverManager().install())
+navegador = webdriver.Chrome(service=service)
 
+try:
+    # Acesso ao site
+    navegador.get('https://quotes.toscrape.com/js-delayed/')
+    WebDriverWait(navegador, 15).until(EC.presence_of_element_located((By.CLASS_NAME, "quote")))
+    quotes = navegador.find_elements(By.CLASS_NAME, "quote")
 
-navegador = webdriver.Chrome()
-navegador.get('https://quotes.toscrape.com/js-delayed/')
+    # Extração dos dados
+    dados = []
+    for quote in quotes:
+        texto = quote.find_element(By.CLASS_NAME, "text").text
+        autor = quote.find_element(By.CLASS_NAME, "author").text
+        tags = [tag.text for tag in quote.find_elements(By.CLASS_NAME, "tag")]
+        dados.append([texto, autor, ';'.join(tags)])
 
-WebDriverWait(navegador, 15).until(EC.presence_of_element_located((By.CLASS_NAME, "quote")))
-quotes = navegador.find_elements(By.CLASS_NAME, "quote")
+    # Salvar em CSV
+    with open("quotes.csv", 'w', newline='', encoding='utf-8') as file:
+        writer = csv.writer(file)
+        writer.writerow(['Citação', 'Autor', 'Tags'])
+        writer.writerows(dados)
 
+finally:
+    navegador.quit()
 
-# Extrair e salvar dados em arquivo CSV, encontrando todas as citações, autores e tags 
-dados = []
-for quote in quotes: 
-    texto = quote.find_element(By.CLASS_NAME, "text").text
-    autor = quote.find_element(By.CLASS_NAME, "author").text
-    tags = [tag.text for tag in quote.find_elements(By.CLASS_NAME, "tag")]
-    dados.append([texto, autor, ';'.join(tags)])
-
-
-with open("quotes.csv", 'w', newline='', encoding='utf-8') as file:
-    writer = csv.writer(file)
-    writer.writerow(['Citação', 'Autor', 'Tags'])
-    writer.writerows(dados)
-
-navegador.quit()
-
-# Leitura e exibição_df do arquivo CSV em Pandas
-
-import pandas as pd
-
-def proc_dados():
+# Processamento dos dados do CSV
+def processar_dados_csv():
     df = pd.read_csv("quotes.csv")
     df.columns = df.columns.str.strip()
-    print(df.head())
+    
+    qtd_citacoes = df.shape[0]
+    autor_mais_recorrente = df['Autor'].mode()[0]
+    df['Tags'] = df['Tags'].fillna('')
+    tot_tags = df['Tags'].str.split(';').explode()
+    tag_mais_recorrente = tot_tags.mode()[0]
+    
+    return qtd_citacoes, autor_mais_recorrente, tag_mais_recorrente
 
-    numero_quotes = df.shape[0]
-    autor_mais_frequente = df['Autor'].mode()[0]
-    tot_tags = df ['Tags'].str.split(';').explode()
-    tag_mais_frequente = tot_tags.mode()[0]
+# Exibir dados processados
+qtd_citacoes, autor_mais_recorrente, tag_mais_recorrente = processar_dados_csv()
+print(f'Total de citações: {qtd_citacoes}')
+print(f'Autor mais recorrente: {autor_mais_recorrente}')
+print(f'Tag mais utilizada: {tag_mais_recorrente}')
 
-    print(f'Total de citações: {numero_quotes}')
-    print(f'Autor mais recorrente: {autor_mais_frequente}')
-    print(f'Tag mais utilizada: {tag_mais_frequente}')
-
-
-proc_dados()
-
-# Adicionar um log detalhado de depuração para verificar a leitura do arquivo
+# Função para envio de e-mail
 def enviar_email():
+    servidor = None  # Inicializar como None para garantir que o quit só será chamado se o servidor for criado
     try:
-        usuario = os.getenv('EMAIL_USER')
-        senha = os.getenv('EMAIL_PASSWORD')
         
+        usuario =  'albuquerquedevback@gmail.com'
+        senha = "cvgx wrpb mldi ngdm" 
+
+        if not usuario or not senha:
+            print("Erro: Credenciais de e-mail não configuradas.")
+            return
+
         servidor = smtplib.SMTP('smtp.gmail.com', 587)
         servidor.starttls()
-        print('Conexão com o servidor SMTP estabelecida.')
-        
         servidor.login(usuario, senha)
-
-        # Obter os dados processados para o corpo do e-mail
-        qtd_citacoes, autor_mais_recorrente, tag_mais_recorrente = processar_dados_csv() # type: ignore
-
-        if qtd_citacoes is None:
-            print("Erro ao processar o arquivo CSV. E-mail não enviado.")
-            return
 
         mensagem = MIMEMultipart()
         mensagem['From'] = usuario
@@ -85,7 +82,7 @@ def enviar_email():
 
         corpo_email = f"""
         Relatório de Citações:
-
+        
         Quantidade de Citações: {qtd_citacoes}
         Autor Mais Recorrente: {autor_mais_recorrente}
         Tag Mais Utilizada: {tag_mais_recorrente}
@@ -98,24 +95,12 @@ def enviar_email():
             print("Erro: O arquivo 'quotes.csv' não foi encontrado.")
             return
 
-        try:
-            with open('quotes.csv', 'rb') as arquivo:
-                arquivo_conteudo = arquivo.read()
-                
-                if arquivo_conteudo is None or len(arquivo_conteudo) == 0:
-                    print("Erro: O arquivo 'quotes.csv' está vazio ou não pôde ser lido.")
-                    return
-                else:
-                    print(f"Conteúdo do arquivo lido com sucesso. Tamanho do conteúdo: {len(arquivo_conteudo)} bytes.")
-
-                anexo = MIMEBase('application', 'octet-stream')
-                anexo.set_payload(arquivo_conteudo)
-                encoders.encode_base64(anexo)
-                anexo.add_header('Content-Disposition', 'attachment', filename='quotes.csv')
-                mensagem.attach(anexo)
-        except Exception as e:
-            print(f"Erro ao abrir o arquivo 'quotes.csv': {e}")
-            return
+        with open('quotes.csv', 'rb') as arquivo:
+            anexo = MIMEBase('application', 'octet-stream')
+            anexo.set_payload(arquivo.read())
+            encoders.encode_base64(anexo)
+            anexo.add_header('Content-Disposition', 'attachment', filename='quotes.csv')
+            mensagem.attach(anexo)
 
         servidor.send_message(mensagem)
         print('E-mail enviado com sucesso!')
@@ -124,9 +109,8 @@ def enviar_email():
         print(f"Erro ao enviar e-mail: {e}")
 
     finally:
-        try:
-            if 'servidor' in locals():
-                servidor.quit()
-                print('Conexão SMTP fechada.')
-        except Exception as e:
-            print(f"Erro ao fechar a conexão SMTP: {e}")
+        if servidor:  # Só chama quit se servidor foi iniciado
+            servidor.quit()
+            print('Conexão SMTP fechada.')
+
+enviar_email()
